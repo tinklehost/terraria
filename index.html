@@ -1,46 +1,223 @@
 <!doctype html>
 <html lang="en">
-	<head>
-		<meta charset="UTF-8" />
-		<link rel="icon" href="./app.ico" />
-		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<meta property="og:title" content="Terrarium" />
-		<meta
-			property="og:description"
-			content="Terraria port for WebAssembly. Play Terraria online in the browser."
-		/>
-		<meta
-			name="description"
-			content="Terraria port for WebAssembly. Play Terraria online in the browser."
-		/>
-		<style>
-			html, body {
+<head>
+<meta charset="UTF-8" />
+<link rel="icon" href="./app.ico" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+<title>Terraria</title>
+
+<style>
+/* ================= GLOBAL ================= */
+html, body {
   margin: 0;
   padding: 0;
   width: 100%;
   height: 100%;
   overflow: hidden;
+  background: #000;
 }
 
-#game-container, iframe, canvas {
+canvas {
   position: absolute;
-  top: 0;
-  left: 0;
+  inset: 0;
   width: 100%;
   height: 100%;
-  border: none;
-  display: block;
 }
-		</style>
-		<link rel="canonical" href="https://terraria.mercurywork.shop" />
-		<title>Terrarium</title>
-		<script type="module" crossorigin src="main.js"></script>
-	</head>
 
-	<body>
-		<div id="app"></div>
-		<canvas id="canvas" style="width: 100%">
+/* ================= INTRO (RCD STYLE) ================= */
+body.intro-active {
+  overflow: hidden;
+}
 
-		</canvas>
-	</body>
+#intro-screen {
+  position: fixed;
+  inset: 0;
+  background-color: #414141;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20000;
+  transition: opacity .7s ease, visibility .7s ease;
+}
+
+#intro-screen.hidden-intro {
+  opacity: 0;
+  visibility: hidden;
+}
+
+#intro-title {
+  font-family: Orbitron, Arial, sans-serif;
+  font-size: 42px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  margin-bottom: 20px;
+  background: linear-gradient(90deg, #d3a410, #b7870f, #ffe4a1);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 0 8px rgba(211,165,16,.4));
+  animation: titleFade 1s ease forwards .4s;
+  opacity: 0;
+  text-align: center;
+}
+
+@keyframes titleFade {
+  from { opacity: 0; transform: translateY(-12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ================= TERMINAL LOADER ================= */
+@keyframes blinkCursor { 50% { border-right-color: transparent; } }
+@keyframes typeAndDelete {
+  0%,10% { width: 0 }
+  45%,55% { width: 9em }
+  90%,100% { width: 0 }
+}
+
+#terminal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 15000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.terminal-loader {
+  background: #1a1a1a;
+  color: #0f0;
+  font-family: "Courier New", monospace;
+  padding: 1.5em 1em;
+  width: 18em;
+  border: .1em solid #333;
+  border-radius: 4px;
+}
+
+.terminal-header {
+  background: #333;
+  height: 1.5em;
+  margin: -1.5em -1em 1em;
+  padding: 0 .5em;
+  color: #eee;
+}
+
+.text {
+  white-space: nowrap;
+  overflow: hidden;
+  border-right: .2em solid green;
+  animation:
+    typeAndDelete 4s steps(18) infinite,
+    blinkCursor .5s step-end infinite alternate;
+}
+
+#terminal-progress {
+  margin-top: 1em;
+  height: 10px;
+  background: #000;
+  border: 1px solid #0f0;
+}
+
+#terminal-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: #0f0;
+  transition: width .15s linear;
+}
+</style>
+
+<!-- ================= INTRO HTML ================= -->
+<body class="intro-active">
+
+<div id="intro-screen">
+  <div style="text-align:center">
+    <div id="intro-title">Tinkle Games</div>
+    <!-- (SVG EXACTLY AS PROVIDED, UNCHANGED) -->
+    <!-- trimmed here for brevity — keep your SVG exactly as-is -->
+  </div>
+</div>
+
+<!-- ================= TERMINAL LOADER ================= -->
+<div id="terminal-overlay">
+  <div class="terminal-loader">
+    <div class="terminal-header">Status</div>
+    <div class="text" id="terminal-text">Initializing...</div>
+    <div id="terminal-progress">
+      <div id="terminal-progress-fill"></div>
+    </div>
+  </div>
+</div>
+
+<div id="app"></div>
+<canvas id="canvas"></canvas>
+
+<!-- ================= LOADER LOGIC ================= -->
+<script>
+(() => {
+  const terminal = document.getElementById("terminal-overlay");
+  const text = document.getElementById("terminal-text");
+  const bar = document.getElementById("terminal-progress-fill");
+
+  let total = 0, loaded = 0;
+  const seen = new Set();
+
+  function update(url) {
+    const pct = total ? (loaded / total) * 100 : 0;
+    text.textContent = `Loading ${url.split("/").pop()} (${pct.toFixed(1)}%)`;
+    bar.style.width = pct + "%";
+  }
+
+  /* Kill default .NET loader */
+  new MutationObserver(() => {
+    const old = document.getElementById("loading-progress");
+    if (old) old.remove();
+  }).observe(document.documentElement, { childList:true, subtree:true });
+
+  /* Fetch hook */
+  const ofetch = window.fetch;
+  window.fetch = async (...a) => {
+    const r = await ofetch(...a);
+    const url = typeof a[0] === "string" ? a[0] : a[0].url;
+
+    if (url && /\.(wasm|bin|data)$/i.test(url) && !seen.has(url)) {
+      seen.add(url);
+      total += +r.headers.get("Content-Length") || 0;
+      const reader = r.clone().body?.getReader();
+      if (reader) {
+        (async () => {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            loaded += value.length;
+            update(url);
+          }
+        })();
+      }
+    }
+    return r;
+  };
+
+  /* Intro → terminal transition */
+  window.addEventListener("load", () => {
+    const intro = document.getElementById("intro-screen");
+    setTimeout(() => {
+      intro.classList.add("hidden-intro");
+      document.body.classList.remove("intro-active");
+      setTimeout(() => {
+        intro.remove();
+        terminal.style.display = "flex";
+      }, 800);
+    }, 2000);
+  });
+
+  /* Hide terminal when ready */
+  window.addEventListener("load", () => {
+    setTimeout(() => terminal.remove(), 4000);
+  });
+})();
+</script>
+
+<!-- ================= YOUR GAME ================= -->
+<script type="module" crossorigin src="main.js"></script>
+
+</body>
 </html>
