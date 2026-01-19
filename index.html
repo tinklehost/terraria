@@ -157,61 +157,74 @@ body.intro-active {
   const text = document.getElementById("terminal-text");
   const bar = document.getElementById("terminal-progress-fill");
 
-  let total = 0, loaded = 0;
+  let totalBytes = 0;
+  let loadedBytes = 0;
+  let activeLoads = 0;
   const seen = new Set();
 
   function update(url) {
-    const pct = total ? (loaded / total) * 100 : 0;
+    const pct = totalBytes
+      ? Math.min(100, (loadedBytes / totalBytes) * 100)
+      : 0;
+
     text.textContent = `Loading ${url.split("/").pop()} (${pct.toFixed(1)}%)`;
     bar.style.width = pct + "%";
   }
 
-  /* Kill default .NET loader */
+  /* 🔥 Remove default .NET loader */
   new MutationObserver(() => {
     const old = document.getElementById("loading-progress");
     if (old) old.remove();
-  }).observe(document.documentElement, { childList:true, subtree:true });
+  }).observe(document.documentElement, { childList: true, subtree: true });
 
-  /* Fetch hook */
-  const ofetch = window.fetch;
-  window.fetch = async (...a) => {
-    const r = await ofetch(...a);
-    const url = typeof a[0] === "string" ? a[0] : a[0].url;
+  /* 🌐 Fetch hook */
+  const originalFetch = window.fetch;
+  window.fetch = async (...args) => {
+    const res = await originalFetch(...args);
+    const url = typeof args[0] === "string" ? args[0] : args[0].url;
 
     if (url && /\.(wasm|bin|data)$/i.test(url) && !seen.has(url)) {
       seen.add(url);
-      total += +r.headers.get("Content-Length") || 0;
-      const reader = r.clone().body?.getReader();
+      activeLoads++;
+
+      const size = +res.headers.get("Content-Length") || 0;
+      totalBytes += size;
+
+      const reader = res.clone().body?.getReader();
       if (reader) {
         (async () => {
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            loaded += value.length;
+            loadedBytes += value.length;
             update(url);
+          }
+
+          /* ✔ File finished */
+          activeLoads--;
+
+          /* ✔ All files finished → hide terminal */
+          if (activeLoads === 0) {
+            setTimeout(() => terminal.remove(), 500);
           }
         })();
       }
     }
-    return r;
+    return res;
   };
 
-  /* Intro → terminal transition */
+  /* 🎬 Intro → Terminal transition */
   window.addEventListener("load", () => {
     const intro = document.getElementById("intro-screen");
     setTimeout(() => {
       intro.classList.add("hidden-intro");
       document.body.classList.remove("intro-active");
+
       setTimeout(() => {
         intro.remove();
         terminal.style.display = "flex";
       }, 800);
     }, 2000);
-  });
-
-  /* Hide terminal when ready */
-  window.addEventListener("load", () => {
-    setTimeout(() => terminal.remove(), 4000);
   });
 })();
 </script>
